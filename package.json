@@ -1,7 +1,7 @@
 {
-  "name": "@quartz-community/search",
+  "name": "search-pro",
   "version": "1.0.0",
-  "description": "Search component for Quartz - full-text search with FlexSearch.",
+  "description": "Search component for Quartz (Pro fork) - full-text search with FlexSearch, result stats and incremental load-more.",
   "type": "module",
   "license": "MIT",
   "author": "Quartz Community",
@@ -90,21 +90,23 @@
     "npm": ">=10.9.2"
   },
   "quartz": {
-    "name": "search",
-    "displayName": "Search",
+    "name": "search-pro",
+    "displayName": "Search Pro",
     "category": "component",
     "version": "1.0.0",
     "quartzVersion": ">=5.0.0",
     "dependencies": [],
     "defaultOrder": 50,
-    "defaultEnabled": true,
+    "defaultEnabled": false,
     "defaultOptions": {
       "enablePreview": true,
       "fieldPriority": [
         "title",
         "content",
         "tags"
-      ]
+      ],
+      "initialDisplayCount": 10,
+      "loadMoreCount": 10
     },
     "components": {
       "Search": {
@@ -119,6 +121,12 @@
       },
       "fieldPriority": {
         "type": "array"
+      },
+      "initialDisplayCount": {
+        "type": "number"
+      },
+      "loadMoreCount": {
+        "type": "number"
       }
     }
   },

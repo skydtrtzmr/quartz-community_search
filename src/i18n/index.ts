@@ -29,7 +29,19 @@ import viVN from "./locales/vi-VN";
 import zhCN from "./locales/zh-CN";
 import zhTW from "./locales/zh-TW";
 
-const locales: Record<string, typeof enUS> = {
+type SearchStrings = typeof enUS;
+
+/**
+ * Locale files may be partial: any missing string falls back to en-US, so a new
+ * string only needs to be added to en-US (plus the locales that are translated).
+ */
+type PartialSearchStrings = {
+  components?: {
+    search?: Partial<SearchStrings["components"]["search"]>;
+  };
+};
+
+const partialLocales: Record<string, PartialSearchStrings> = {
   "en-US": enUS,
   "ar-SA": arSA,
   "ca-ES": caES,
@@ -61,6 +73,13 @@ const locales: Record<string, typeof enUS> = {
   "zh-CN": zhCN,
   "zh-TW": zhTW,
 };
+
+const locales: Record<string, SearchStrings> = Object.fromEntries(
+  Object.entries(partialLocales).map(([localeName, value]) => [
+    localeName,
+    { components: { search: { ...enUS.components.search, ...(value.components?.search ?? {}) } } },
+  ]),
+);
 
 export function i18n(locale: string) {
   return locales[locale] || enUS;

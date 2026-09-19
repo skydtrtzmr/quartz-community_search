@@ -381,3 +381,53 @@
 .search-scroll-target.fade-out {
   background: transparent;
 }
+
+/* Result stats row ("showing X/Y results") pinned above the result cards. */
+.search
+  > .search-container
+  > .search-space
+  > .search-layout
+  > .results-container
+  .result-card.result-stats {
+  cursor: default;
+  padding: 0.6em 1em;
+  background: var(--lightgray);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.search
+  > .search-container
+  > .search-space
+  > .search-layout
+  > .results-container
+  .result-card.result-stats
+  > p {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85em;
+  color: var(--gray);
+}
+
+/* "Load more" card appended after the last rendered result. */
+.search
+  > .search-container
+  > .search-space
+  > .search-layout
+  > .results-container
+  .result-card.load-more-btn {
+  background: var(--highlight);
+}
+
+.search
+  > .search-container
+  > .search-space
+  > .search-layout
+  > .results-container
+  .result-card.load-more-btn
+  > h3.card-title {
+  text-align: center;
+  font-size: 0.95em;
+  color: var(--secondary);
+}

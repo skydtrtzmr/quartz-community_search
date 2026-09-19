@@ -14,24 +14,31 @@ export type SearchField = "title" | "content" | "tags";
 export interface SearchOptions {
   enablePreview: boolean;
   fieldPriority: SearchField[];
+  /** How many results are rendered on the first pass. Defaults to 10. */
+  initialDisplayCount: number;
+  /** How many extra results are appended per "load more" click. Defaults to 10. */
+  loadMoreCount: number;
 }
 
 const defaultOptions: SearchOptions = {
   enablePreview: true,
   fieldPriority: ["title", "content", "tags"],
+  initialDisplayCount: 10,
+  loadMoreCount: 10,
 };
 
 export default ((userOpts?: Partial<SearchOptions>) => {
   const Search: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
     const opts = { ...defaultOptions, ...userOpts };
     const locale = cfg.locale ?? "en-US";
-    const searchPlaceholder = i18n(locale).components.search.searchBarPlaceholder;
+    const strings = i18n(locale).components.search;
+    const searchPlaceholder = strings.searchBarPlaceholder;
 
     return (
       <div class={classNames(displayClass, "search")}>
         <button
           class="search-button"
-          aria-label={i18n(locale).components.search.title}
+          aria-label={strings.title}
           aria-expanded="false"
         >
           <svg role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 19.9 19.7">
@@ -41,7 +48,7 @@ export default ((userOpts?: Partial<SearchOptions>) => {
               <circle cx="8" cy="8" r="7" />
             </g>
           </svg>
-          <p>{i18n(locale).components.search.title}</p>
+          <p>{strings.title}</p>
         </button>
         <div class="search-container">
           <div class="search-space">
@@ -57,6 +64,12 @@ export default ((userOpts?: Partial<SearchOptions>) => {
               class="search-layout"
               data-preview={opts.enablePreview}
               data-field-priority={JSON.stringify(opts.fieldPriority)}
+              data-initial-display={String(opts.initialDisplayCount)}
+              data-load-more={String(opts.loadMoreCount)}
+              data-text-results-stats={strings.resultsStats}
+              data-text-load-more={strings.loadMore}
+              data-text-no-results={strings.noResults}
+              data-text-no-results-hint={strings.noResultsHint}
             ></div>
           </div>
         </div>

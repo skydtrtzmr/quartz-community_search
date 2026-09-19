@@ -19,7 +19,10 @@ interface Item {
 type SearchType = "basic" | "tags";
 let searchType: SearchType = "basic";
 let currentSearchTerm: string = "";
-const numSearchResults = 8;
+const defaultInitialDisplayCount = 10;
+const defaultLoadMoreCount = 10;
+/** Upper bound for FlexSearch queries, so the reported total (and "load more") is accurate. */
+const maxSearchResults = 10000;
 const numTagResults = 5;
 const contextWindowWords = 30;
 
@@ -157,6 +160,40 @@ async function setupSearch() {
       ? JSON.parse(fieldPriorityAttr)
       : ["title", "content", "tags"];
 
+    const parsePositiveInt = (value: string | null, fallback: number): number => {
+      const parsed = value ? parseInt(value, 10) : NaN;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+
+    const initialDisplayCount = parsePositiveInt(
+      searchLayout.getAttribute("data-initial-display"),
+      defaultInitialDisplayCount,
+    );
+    const loadMoreCount = parsePositiveInt(
+      searchLayout.getAttribute("data-load-more"),
+      defaultLoadMoreCount,
+    );
+
+    const resultsStatsTemplate =
+      searchLayout.getAttribute("data-text-results-stats")?.trim() || "{shown}/{total} results";
+    const loadMoreTemplate =
+      searchLayout.getAttribute("data-text-load-more")?.trim() ||
+      "Load more ({remaining} remaining)";
+    const noResultsText = searchLayout.getAttribute("data-text-no-results")?.trim() || "No results.";
+    const noResultsHintText =
+      searchLayout.getAttribute("data-text-no-results-hint")?.trim() || "Try another search term?";
+
+    const formatTemplate = (template: string, values: Record<string, string | number>): string =>
+      Object.entries(values).reduce(
+        (text, [key, value]) => text.replaceAll(`{${key}}`, String(value)),
+        template,
+      );
+
+    // Pagination state, kept per search instance.
+    let allResultIds: number[] = [];
+    let resultTerm = "";
+    let currentDisplayCount = initialDisplayCount;
+
     let results = searchLayout.querySelector(".results-container") as HTMLDivElement | null;
     if (!results) {
       results = document.createElement("div");
@@ -289,6 +326,9 @@ async function setupSearch() {
       searchLayout.classList.remove("display-results");
       searchType = "basic";
       currentHover = null;
+      allResultIds = [];
+      resultTerm = "";
+      currentDisplayCount = initialDisplayCount;
       hideTagDropdown();
       searchButton.focus();
     };
@@ -301,52 +341,102 @@ async function setupSearch() {
       searchBar.focus();
     };
 
-    const displayResults = async (finalResults: any[]) => {
+    const renderResults = async () => {
+      const totalCount = allResultIds.length;
+      const pageIds = allResultIds.slice(0, currentDisplayCount);
+      const pageResults = pageIds.map((id) => formatForDisplay(resultTerm, id));
+      await displayResults(pageResults, totalCount);
+    };
+
+    const loadMore = async () => {
+      const firstNewIndex = currentDisplayCount;
+      currentDisplayCount += loadMoreCount;
+      await renderResults();
+      const resultElements = getResultElements();
+      if (resultElements.length === 0) return;
+      setFocus(resultElements[Math.min(firstNewIndex, resultElements.length - 1)] ?? null);
+    };
+
+    const displayResults = async (finalResults: any[], totalCount: number) => {
       removeAllChildren(results);
 
-      if (finalResults.length === 0) {
+      if (totalCount === 0) {
         const noMatch = document.createElement("a");
         noMatch.className = "result-card no-match";
         const noMatchTitle = document.createElement("h3");
-        noMatchTitle.textContent = "No results.";
+        noMatchTitle.textContent = noResultsText;
         const noMatchHint = document.createElement("p");
-        noMatchHint.textContent = "Try another search term?";
+        noMatchHint.textContent = noResultsHintText;
         noMatch.appendChild(noMatchTitle);
         noMatch.appendChild(noMatchHint);
         results.appendChild(noMatch);
         currentHover = null;
         if (preview) removeAllChildren(preview);
-      } else {
-        for (const item of finalResults) {
-          const itemTile = document.createElement("a");
-          itemTile.className = "result-card";
-          itemTile.id = item.slug;
-          itemTile.href = resolveBasePath(item.slug);
+        return;
+      }
 
-          const titleEl = document.createElement("h3");
-          titleEl.className = "card-title";
-          titleEl.innerHTML = item.title.replace(/<(?!\/?span\b)[^>]*>/gi, "");
-          itemTile.appendChild(titleEl);
+      const stats = document.createElement("div");
+      stats.className = "result-card result-stats";
+      stats.setAttribute("aria-live", "polite");
+      const statsText = document.createElement("p");
+      statsText.textContent = formatTemplate(resultsStatsTemplate, {
+        shown: finalResults.length,
+        total: totalCount,
+      });
+      stats.appendChild(statsText);
+      results.appendChild(stats);
 
-          if (item.tags.length > 0) {
-            const tagList = document.createElement("ul");
-            tagList.className = "tags";
-            tagList.innerHTML = item.tags.join("");
-            itemTile.appendChild(tagList);
-          }
+      for (const item of finalResults) {
+        const itemTile = document.createElement("a");
+        itemTile.className = "result-card";
+        itemTile.id = item.slug;
+        itemTile.href = resolveBasePath(item.slug);
 
-          const descEl = document.createElement("p");
-          descEl.className = "card-description";
-          descEl.innerHTML = item.content.replace(/<(?!\/?span\b)[^>]*>/gi, "");
-          itemTile.appendChild(descEl);
+        const titleEl = document.createElement("h3");
+        titleEl.className = "card-title";
+        titleEl.innerHTML = item.title.replace(/<(?!\/?span\b)[^>]*>/gi, "");
+        itemTile.appendChild(titleEl);
 
-          results.appendChild(itemTile);
+        if (item.tags.length > 0) {
+          const tagList = document.createElement("ul");
+          tagList.className = "tags";
+          tagList.innerHTML = item.tags.join("");
+          itemTile.appendChild(tagList);
         }
+
+        const descEl = document.createElement("p");
+        descEl.className = "card-description";
+        descEl.innerHTML = item.content.replace(/<(?!\/?span\b)[^>]*>/gi, "");
+        itemTile.appendChild(descEl);
+
+        results.appendChild(itemTile);
+      }
+
+      const remainingCount = totalCount - finalResults.length;
+      if (remainingCount > 0) {
+        const loadMoreEl = document.createElement("div");
+        loadMoreEl.className = "result-card load-more-btn";
+        loadMoreEl.setAttribute("role", "button");
+        const loadMoreLabel = formatTemplate(loadMoreTemplate, { remaining: remainingCount });
+        loadMoreEl.setAttribute("aria-label", loadMoreLabel);
+        const loadMoreText = document.createElement("h3");
+        loadMoreText.className = "card-title";
+        loadMoreText.textContent = loadMoreLabel;
+        loadMoreEl.appendChild(loadMoreText);
+        const onLoadMoreClick = (event: Event) => {
+          event.preventDefault();
+          void loadMore();
+        };
+        loadMoreEl.addEventListener("click", onLoadMoreClick);
+        addCleanup(() => loadMoreEl.removeEventListener("click", onLoadMoreClick));
+        results.appendChild(loadMoreEl);
       }
     };
 
     const getResultElements = (): HTMLElement[] => {
-      return Array.from(results.querySelectorAll<HTMLElement>(".result-card:not(.no-match)"));
+      return Array.from(
+        results.querySelectorAll<HTMLElement>(".result-card:not(.no-match):not(.result-stats)"),
+      );
     };
 
     const highlightTerm = () => {
@@ -358,6 +448,8 @@ async function setupSearch() {
       if (!preview) return;
       removeAllChildren(preview);
       if (!el) return;
+      // The "load more" card is not a document, it has no preview.
+      if (el.classList.contains("load-more-btn")) return;
       const slug = el.id;
       const token = ++previewToken;
       const contents = await fetchContent(slug);
@@ -446,6 +538,9 @@ async function setupSearch() {
         removeAllChildren(results);
         if (preview) removeAllChildren(preview);
         currentHover = null;
+        allResultIds = [];
+        resultTerm = "";
+        currentDisplayCount = initialDisplayCount;
         return;
       }
 
@@ -453,13 +548,13 @@ async function setupSearch() {
       if (parsed.query) {
         searchResults = await index.searchAsync({
           query: parsed.query,
-          limit: parsed.tags.length > 0 ? 10000 : numSearchResults,
+          limit: maxSearchResults,
           index: ["title", "content"],
         });
       } else if (parsed.tags.length > 0) {
         searchResults = await index.searchAsync({
           query: parsed.tags[0],
-          limit: 10000,
+          limit: maxSearchResults,
           index: ["tags"],
         });
       } else {
@@ -487,9 +582,11 @@ async function setupSearch() {
 
       const displayTerm =
         parsed.query || (parsed.tags.length > 0 ? parsed.tags.join(" ") : inputValue);
-      const finalResults = filteredIds.map((id) => formatForDisplay(displayTerm, id));
+      allResultIds = filteredIds;
+      resultTerm = displayTerm;
+      currentDisplayCount = initialDisplayCount;
 
-      await displayResults(finalResults.slice(0, numSearchResults));
+      await renderResults();
       const resultElements = getResultElements();
       setFocus(resultElements[0] ?? null);
     };
@@ -549,6 +646,11 @@ async function setupSearch() {
       }
       if (e.key === "Enter" && !e.isComposing) {
         const focused = currentHover;
+        if (focused?.classList.contains("load-more-btn")) {
+          e.preventDefault();
+          void loadMore();
+          return;
+        }
         if (focused instanceof HTMLAnchorElement) {
           e.preventDefault();
           storeSearchTerm();
@@ -582,8 +684,12 @@ async function setupSearch() {
     };
 
     const onResultsClick = (e: Event) => {
-      const target = (e.target as HTMLElement).closest(".result-card") as HTMLAnchorElement | null;
+      const target = (e.target as HTMLElement).closest(".result-card") as HTMLElement | null;
       if (!target || target.classList.contains("no-match")) return;
+      // The stats row and the "load more" card are not navigable results.
+      if (target.classList.contains("result-stats") || target.classList.contains("load-more-btn")) {
+        return;
+      }
       if (e instanceof MouseEvent && (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)) return;
       storeSearchTerm();
       hideSearch();
@@ -591,6 +697,7 @@ async function setupSearch() {
     const onResultsMouseover = (e: Event) => {
       const target = (e.target as HTMLElement).closest(".result-card") as HTMLElement | null;
       if (!target || target.classList.contains("no-match")) return;
+      if (target.classList.contains("result-stats")) return;
       setFocus(target);
     };
     results.addEventListener("click", onResultsClick);

@@ -7,6 +7,8 @@ export default {
       noResultsHint: "\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u641c\u7d22\u8bcd\u3002",
       tagFilterHint: "\u6309\u6807\u7b7e\u7b5b\u9009",
       noTagsFound: "\u6ca1\u6709\u5339\u914d\u7684\u6807\u7b7e",
+      resultsStats: "\u663e\u793a {shown}/{total} \u6761\u7ed3\u679c",
+      loadMore: "\u52a0\u8f7d\u66f4\u591a\uff08\u5269\u4f59 {remaining} \u6761\uff09",
     },
   },
 };

@@ -7,6 +7,8 @@ export default {
       noResultsHint: "Try another search term?",
       tagFilterHint: "Filter by tag",
       noTagsFound: "No matching tags",
+      resultsStats: "Showing {shown}/{total} results",
+      loadMore: "Load more ({remaining} remaining)",
     },
   },
 };
