@@ -6,6 +6,7 @@ import {
   resolveBasePath,
   escapeHTML,
 } from "@quartz-community/utils";
+import { matchAllYamlQueries, matchYamlField, parseSearchQuery } from "../../util/searchQuery";
 
 interface Item {
   id: number;
@@ -13,10 +14,11 @@ interface Item {
   title: string;
   content: string;
   tags: string[];
+  frontmatter?: Record<string, unknown>;
   [key: string]: any;
 }
 
-type SearchType = "basic" | "tags";
+type SearchType = "basic" | "tags" | "yaml";
 let searchType: SearchType = "basic";
 let currentSearchTerm: string = "";
 const defaultInitialDisplayCount = 10;
@@ -87,20 +89,6 @@ let contentData: Record<string, Item> | null = null;
 let idDataMap: string[] = [];
 let allTags: string[] = [];
 const fetchContentCache = new Map<string, Element[]>();
-
-function parseSearchQuery(input: string): { tags: string[]; query: string } {
-  const tokens = input.split(/\s+/);
-  const tags: string[] = [];
-  const queryParts: string[] = [];
-  for (const token of tokens) {
-    if (token.startsWith("#") && token.length > 1) {
-      tags.push(token.substring(1));
-    } else if (token !== "#") {
-      queryParts.push(token);
-    }
-  }
-  return { tags, query: queryParts.join(" ").trim() };
-}
 
 function getCurrentTagToken(input: string): string | null {
   const tokens = input.split(/\s+/);
@@ -441,7 +429,14 @@ async function setupSearch() {
 
     const highlightTerm = () => {
       const parsed = parseSearchQuery(currentSearchTerm);
-      return parsed.query || (parsed.tags.length > 0 ? parsed.tags.join(" ") : currentSearchTerm);
+      const terms: string[] = [];
+      if (parsed.text.trim()) terms.push(parsed.text.trim());
+      terms.push(...parsed.tags);
+      for (const query of parsed.yamlQueries) {
+        if (query.key) terms.push(query.key);
+        if (query.value) terms.push(query.value);
+      }
+      return terms.length > 0 ? terms.join(" ") : currentSearchTerm;
     };
 
     const updatePreview = async (el: HTMLElement | null) => {
@@ -530,9 +525,25 @@ async function setupSearch() {
       }
 
       const parsed = parseSearchQuery(inputValue);
-      const hasContent = parsed.query !== "" || parsed.tags.length > 0;
+      const hasText = parsed.text.trim().length > 0;
+      const hasYaml = parsed.yamlQueries.length > 0;
+      const hasTags = parsed.tags.length > 0;
+      const hasExcludeText = parsed.excludeTexts.length > 0;
+      const hasExcludeTags = parsed.excludeTags.length > 0;
+      const hasExcludeYaml = parsed.excludeYamlQueries.length > 0;
+      const hasExclude = hasExcludeText || hasExcludeTags || hasExcludeYaml;
+
+      const hasContent = hasText || hasYaml || hasTags;
       searchLayout.classList.toggle("display-results", hasContent);
-      searchType = parsed.tags.length > 0 && !parsed.query ? "tags" : "basic";
+
+      // searchType is only used for display bookkeeping.
+      if (hasYaml && !hasText && !hasTags) {
+        searchType = "yaml";
+      } else if (hasTags && !hasText && !hasYaml) {
+        searchType = "tags";
+      } else {
+        searchType = "basic";
+      }
 
       if (!hasContent) {
         removeAllChildren(results);
@@ -544,45 +555,89 @@ async function setupSearch() {
         return;
       }
 
-      let searchResults: any[];
-      if (parsed.query) {
-        searchResults = await index.searchAsync({
-          query: parsed.query,
+      // Step 1: candidate ids from FlexSearch (text) or every document (field/tag only).
+      let candidateIds: Set<number>;
+      if (hasText) {
+        const searchResults: any[] = await index.searchAsync({
+          query: parsed.text,
           limit: maxSearchResults,
           index: ["title", "content"],
         });
-      } else if (parsed.tags.length > 0) {
-        searchResults = await index.searchAsync({
-          query: parsed.tags[0],
-          limit: maxSearchResults,
-          index: ["tags"],
-        });
+        const getByField = (field: string): number[] => {
+          const matched = searchResults.filter((x: any) => x.field === field);
+          return matched.length === 0 ? [] : ([...matched[0].result] as number[]);
+        };
+        candidateIds = new Set(fieldPriority.flatMap((field) => getByField(field)));
       } else {
-        searchResults = [];
+        candidateIds = new Set(idDataMap.map((_, id) => id));
       }
 
-      const getByField = (field: string): number[] => {
-        const matched = searchResults.filter((x: any) => x.field === field);
-        return matched.length === 0 ? [] : ([...matched[0].result] as number[]);
-      };
-
-      const allIds: Set<number> = new Set(fieldPriority.flatMap((field) => getByField(field)));
-
-      const filteredIds = [...allIds].filter((id) => {
-        if (parsed.tags.length === 0) return true;
-        const slug = idDataMap[id];
-        if (!slug) return false;
-        const item = contentData?.[slug];
-        if (!item) return false;
-        const itemTags: string[] = item.tags || [];
-        return parsed.tags.every((tag) =>
-          itemTags.some((t) => t.toLowerCase() === tag.toLowerCase()),
+      // Step 2: field (frontmatter) include filter.
+      if (hasYaml) {
+        candidateIds = new Set(
+          [...candidateIds].filter((id) => {
+            const slug = idDataMap[id];
+            const item = slug ? contentData?.[slug] : undefined;
+            return item ? matchAllYamlQueries(item, parsed.yamlQueries) : false;
+          }),
         );
-      });
+      }
+
+      // Step 3: tag include filter (exact match, unchanged semantics).
+      if (hasTags) {
+        candidateIds = new Set(
+          [...candidateIds].filter((id) => {
+            const slug = idDataMap[id];
+            const item = slug ? contentData?.[slug] : undefined;
+            if (!item) return false;
+            const itemTags: string[] = item.tags || [];
+            return parsed.tags.every((tag) =>
+              itemTags.some((t) => t.toLowerCase() === tag.toLowerCase()),
+            );
+          }),
+        );
+      }
+
+      // Step 4: exclusion filter (any hit removes the document).
+      if (hasExclude) {
+        candidateIds = new Set(
+          [...candidateIds].filter((id) => {
+            const slug = idDataMap[id];
+            const item = slug ? contentData?.[slug] : undefined;
+            if (!item) return false;
+
+            if (hasExcludeText) {
+              const combinedText = `${item.title ?? ""} ${item.content ?? ""}`.toLowerCase();
+              if (parsed.excludeTexts.some((term) => combinedText.includes(term.toLowerCase()))) {
+                return false;
+              }
+            }
+
+            if (hasExcludeTags) {
+              const itemTags: string[] = item.tags || [];
+              if (
+                parsed.excludeTags.some((et) =>
+                  itemTags.some((dt) => dt.toLowerCase().includes(et.toLowerCase())),
+                )
+              ) {
+                return false;
+              }
+            }
+
+            if (hasExcludeYaml) {
+              if (parsed.excludeYamlQueries.some((query) => matchYamlField(item, query))) {
+                return false;
+              }
+            }
+
+            return true;
+          }),
+        );
+      }
 
       const displayTerm =
-        parsed.query || (parsed.tags.length > 0 ? parsed.tags.join(" ") : inputValue);
-      allResultIds = filteredIds;
+        parsed.text || (parsed.tags.length > 0 ? parsed.tags.join(" ") : inputValue);
+      allResultIds = [...candidateIds];
       resultTerm = displayTerm;
       currentDisplayCount = initialDisplayCount;
 
@@ -679,7 +734,7 @@ async function setupSearch() {
     const storeSearchTerm = () => {
       const parsed = parseSearchQuery(currentSearchTerm);
       const term =
-        parsed.query || (parsed.tags.length > 0 ? parsed.tags.join(" ") : currentSearchTerm);
+        parsed.text || (parsed.tags.length > 0 ? parsed.tags.join(" ") : currentSearchTerm);
       if (term.trim()) sessionStorage.setItem("search-term", term.trim());
     };
 
@@ -877,14 +932,21 @@ function formatForDisplay(term: string, id: number): any {
     };
   }
   const parsed = parseSearchQuery(currentSearchTerm);
+  const highlightTerms: string[] = [];
+  if (parsed.text.trim()) highlightTerms.push(parsed.text.trim());
+  highlightTerms.push(...parsed.tags);
+  for (const query of parsed.yamlQueries) {
+    if (query.key) highlightTerms.push(query.key);
+    if (query.value) highlightTerms.push(query.value);
+  }
+  const combinedTerm = highlightTerms.length > 0 ? highlightTerms.join(" ") : term;
+  const tagsOnly =
+    parsed.tags.length > 0 && parsed.text.trim() === "" && parsed.yamlQueries.length === 0;
   return {
     id: id,
     slug: slug,
-    title:
-      parsed.tags.length > 0 && !parsed.query
-        ? escapeHTML(data.title)
-        : highlight(term, data.title || ""),
-    content: highlight(term, data.content || "", true),
+    title: tagsOnly ? escapeHTML(data.title) : highlight(combinedTerm, data.title || ""),
+    content: highlight(combinedTerm, data.content || "", true),
     tags: highlightTags(parsed.tags, data.tags),
   };
 }
