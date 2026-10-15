@@ -26,6 +26,25 @@ export interface ParsedSearchQuery {
   excludeTexts: string[];
 }
 
+// 将搜索词分解为必需的 terms
+export function extractRequiredTerms(searchTerm: string): string[] {
+  // 按空格分割，得到独立的词或短语
+  return searchTerm.trim().split(/\s+/).filter((term) => term.length > 0);
+}
+
+// 检查文档是否包含所有必需的搜索词/短语
+export function matchesAllTerms(text: string, searchTerms: string[]): boolean {
+  const lowerText = text.toLowerCase();
+  return searchTerms.every((term) => lowerText.includes(term.toLowerCase()));
+}
+
+// 所有标签都必须匹配；按旧版逻辑忽略大小写，使用包含匹配
+export function matchAllTags(tags: string[], queries: string[]): boolean {
+  return queries.every((query) =>
+    tags.some((tag) => tag.toLowerCase().includes(query.toLowerCase())),
+  );
+}
+
 /**
  * Split a raw search string into field queries, tags, free text and the
  * corresponding exclusion lists.

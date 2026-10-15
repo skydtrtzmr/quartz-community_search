@@ -6,7 +6,10 @@ import {
   resolveBasePath,
   escapeHTML,
 } from "@quartz-community/utils";
-import { matchAllYamlQueries, matchYamlField, parseSearchQuery } from "../../util/searchQuery";
+import {
+  extractRequiredTerms, matchesAllTerms, matchAllTags,
+  matchAllYamlQueries, matchYamlField, parseSearchQuery,
+} from "../../util/searchQuery";
 
 interface Item {
   id: number;
@@ -29,15 +32,21 @@ const numTagResults = 5;
 const contextWindowWords = 30;
 
 const encoder = (str: string): string[] => {
+  // 最终返回的 token 数组
   const tokens: string[] = [];
+  // -1 表示当前没有正在处理的英文/数字串
   let bufferStart = -1;
   let bufferEnd = -1;
+  // 转小写，实现大小写不敏感
   const lower = str.toLowerCase();
+  // 字符串索引位置
   let i = 0;
 
   for (const char of lower) {
+    // 获取 Unicode 码点
     const code = char.codePointAt(0)!;
 
+    // 第一步：判断字符类型
     const isCJK =
       (code >= 0x3040 && code <= 0x309f) ||
       (code >= 0x30a0 && code <= 0x30ff) ||
@@ -47,24 +56,30 @@ const encoder = (str: string): string[] => {
 
     const isWhitespace = code === 32 || code === 9 || code === 10 || code === 13;
 
+    // 第二步：根据字符类型处理
     if (isCJK) {
+      // 遇到中文字符：先输出之前的英文/数字串，再将中文字符作为独立 token
       if (bufferStart !== -1) {
         tokens.push(lower.slice(bufferStart, bufferEnd));
         bufferStart = -1;
       }
       tokens.push(char);
     } else if (isWhitespace) {
+      // 遇到空白字符：输出之前的英文/数字串，空白本身不作为 token
       if (bufferStart !== -1) {
         tokens.push(lower.slice(bufferStart, bufferEnd));
         bufferStart = -1;
       }
     } else {
+      // 遇到英文、数字或其他字符：记录起始位置并更新结束位置
       if (bufferStart === -1) bufferStart = i;
       bufferEnd = i + 1;
     }
+    // 移动索引，兼容 emoji 等占多个 UTF-16 码元的字符
     i += char.length;
   }
 
+  // 第三步：处理剩余的 buffer
   if (bufferStart !== -1) {
     tokens.push(lower.slice(bufferStart));
   }
@@ -72,15 +87,17 @@ const encoder = (str: string): string[] => {
   return tokens;
 };
 
+// 配置分词器；中文已拆为单字，tokenize 主要影响英文、数字等非中文串
 const index = new FlexSearch.Document({
   encode: encoder,
   document: {
     id: "id",
     tag: "tags",
     index: [
-      { field: "title", tokenize: "forward" },
-      { field: "content", tokenize: "forward" },
-      { field: "tags", tokenize: "forward" },
+      // 旧版使用 forward（前缀匹配）；full 可匹配中间片段，但会增加索引开销
+      { field: "title", tokenize: "full" },
+      { field: "content", tokenize: "full" },
+      { field: "tags", tokenize: "full" },
     ],
   },
 });
@@ -555,7 +572,7 @@ async function setupSearch() {
         return;
       }
 
-      // Step 1: candidate ids from FlexSearch (text) or every document (field/tag only).
+      // 第一步：如果有文本搜索，使用 FlexSearch 获取候选结果
       let candidateIds: Set<number>;
       if (hasText) {
         const searchResults: any[] = await index.searchAsync({
@@ -568,11 +585,23 @@ async function setupSearch() {
           return matched.length === 0 ? [] : ([...matched[0].result] as number[]);
         };
         candidateIds = new Set(fieldPriority.flatMap((field) => getByField(field)));
+        // 过滤：确保包含所有必需词（沿用旧版完整搜索词/短语的连续匹配）
+        const requiredTerms = extractRequiredTerms(parsed.text);
+        candidateIds = new Set(
+          [...candidateIds].filter((id) => {
+            const slug = idDataMap[id];
+            const item = slug ? contentData?.[slug] : undefined;
+            return item
+              ? matchesAllTerms(`${item.title ?? ""} ${item.content ?? ""}`, requiredTerms)
+              : false;
+          }),
+        );
       } else {
+        // 没有文本搜索，候选集为所有文档
         candidateIds = new Set(idDataMap.map((_, id) => id));
       }
 
-      // Step 2: field (frontmatter) include filter.
+      // 第二步：过滤 YAML 条件（include）
       if (hasYaml) {
         candidateIds = new Set(
           [...candidateIds].filter((id) => {
@@ -583,7 +612,7 @@ async function setupSearch() {
         );
       }
 
-      // Step 3: tag include filter (exact match, unchanged semantics).
+      // 第三步：过滤标签条件（include），沿用旧版包含匹配
       if (hasTags) {
         candidateIds = new Set(
           [...candidateIds].filter((id) => {
@@ -591,14 +620,12 @@ async function setupSearch() {
             const item = slug ? contentData?.[slug] : undefined;
             if (!item) return false;
             const itemTags: string[] = item.tags || [];
-            return parsed.tags.every((tag) =>
-              itemTags.some((t) => t.toLowerCase() === tag.toLowerCase()),
-            );
+            return matchAllTags(itemTags, parsed.tags);
           }),
         );
       }
 
-      // Step 4: exclusion filter (any hit removes the document).
+      // 第四步：排除过滤，命中任意排除条件即移除
       if (hasExclude) {
         candidateIds = new Set(
           [...candidateIds].filter((id) => {
@@ -607,6 +634,7 @@ async function setupSearch() {
             if (!item) return false;
 
             if (hasExcludeText) {
+              // 排除文本匹配：任一排除词出现在标题或正文中即排除
               const combinedText = `${item.title ?? ""} ${item.content ?? ""}`.toLowerCase();
               if (parsed.excludeTexts.some((term) => combinedText.includes(term.toLowerCase()))) {
                 return false;

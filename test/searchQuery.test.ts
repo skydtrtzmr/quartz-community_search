@@ -3,8 +3,50 @@ import {
   parseSearchQuery,
   matchYamlField,
   matchAllYamlQueries,
+  extractRequiredTerms,
+  matchesAllTerms,
+  matchAllTags,
   type YamlQuery,
 } from "../src/util/searchQuery";
+
+describe("Search2 literal text and tag filtering", () => {
+  it("rejects 26-27年 for 26年, but retains contiguous occurrences", () => {
+    const terms = extractRequiredTerms("26年");
+    expect(matchesAllTerms("SS20260007 | 26-27年第二次大修", terms)).toBe(false);
+    expect(matchesAllTerms("SS20260005 | 26年第一次大修", terms)).toBe(true);
+    expect(matchesAllTerms("SS20260003 | 2026年维保项目", terms)).toBe(true);
+    expect(matchesAllTerms("26-27年第二次大修 正文提及2026年", terms)).toBe(true);
+  });
+
+  it("requires continuous Chinese phrases rather than scattered or reordered characters", () => {
+    const terms = extractRequiredTerms("设备故障");
+    expect(matchesAllTerms("设备正常，另有故障", terms)).toBe(false);
+    expect(matchesAllTerms("故障设备", terms)).toBe(false);
+    expect(matchesAllTerms("记录设备故障情况", terms)).toBe(true);
+  });
+
+  it("requires every space-separated term and ignores case", () => {
+    const parsed = parseSearchQuery("@status:进行中 #项目 -废弃 SS2026   第一次大修");
+    const terms = extractRequiredTerms(parsed.text);
+    expect(terms).toEqual(["SS2026", "第一次大修"]);
+    expect(matchesAllTerms("ss20260005 | 26年第一次大修", terms)).toBe(true);
+    expect(matchesAllTerms("ss20260005 | 第二次大修", terms)).toBe(false);
+    expect(matchesAllTerms("第一次大修 正文编号 ss20260005", terms)).toBe(true);
+    expect(extractRequiredTerms(" \t\n")).toEqual([]);
+  });
+
+  it("treats punctuation literally rather than as a regular expression", () => {
+    expect(matchesAllTerms("编号 A.01-02", ["a.01-02"])).toBe(true);
+    expect(matchesAllTerms("编号 Ax01-02", ["a.01-02"])).toBe(false);
+  });
+
+  it("restores partial tag matching and requires all tag filters", () => {
+    expect(matchAllTags(["项目负责人", "AI/设备"], ["负责人", "ai"])).toBe(true);
+    expect(matchAllTags(["项目负责人"], ["负责人", "ai"])).toBe(false);
+    expect(matchAllTags([], ["项目"])).toBe(false);
+    expect(matchAllTags([], [])).toBe(true);
+  });
+});
 
 describe("parseSearchQuery", () => {
   it("parses plain text only", () => {
